@@ -652,5 +652,11 @@ namespace MediaBrowser.Controller.Library
         /// This exists so plugins can trigger a library scan.
         /// </remarks>
         void QueueLibraryScan();
+        /// <summary>
+        /// Called when [file system renamed].
+        /// </summary>
+        /// <param name="oldPath">The old path.</param>
+        /// <param name="newPath">The new path.</param>
+        void OnFileSystemRenamed(string oldPath, string newPath);
     }
 }

@@ -2675,7 +2675,40 @@ namespace Emby.Server.Implementations.Library
         /// <inheritdoc />
         public void QueueLibraryScan()
         {
-            _taskManager.QueueScheduledTask<RefreshMediaLibraryTask>();
+            _taskManager.CancelIfRunningAndQueue<IScheduledTask>();
+        }
+
+        /// <inheritdoc />
+        public void OnFileSystemRenamed(string oldPath, string newPath)
+        {
+            var item = FindByPath(oldPath, true);
+            if (item == null)
+            {
+                return;
+            }
+
+            var newItemId = GetNewItemId(newPath, item.GetType());
+            if (newItemId.Equals(item.Id))
+            {
+                return;
+            }
+
+            _logger.LogInformation("File system rename detected from {OldPath} to {NewPath}. Migrating UserData from {OldId} to {NewId}", oldPath, newPath, item.Id, newItemId);
+
+            var users = _userManager.GetUsers();
+            foreach (var user in users)
+            {
+                var userData = _userDataManager.GetUserData(user, item);
+                if (userData != null)
+                {
+                    // Create a dummy item to save data against the new ID
+                    var dummyItem = (BaseItem)Activator.CreateInstance(item.GetType());
+                    dummyItem.Id = newItemId;
+                    dummyItem.Path = newPath;
+                    
+                    _userDataManager.SaveUserData(user, dummyItem, userData, UserDataSaveReason.Import, CancellationToken.None);
+                }
+            }
         }
 
         /// <inheritdoc />

@@ -288,7 +288,7 @@ namespace Emby.Server.Implementations.IO
 
                     watcher.Created -= OnWatcherChanged;
                     watcher.Deleted -= OnWatcherChanged;
-                    watcher.Renamed -= OnWatcherChanged;
+                    watcher.Renamed -= OnWatcherRenamed;
                     watcher.Changed -= OnWatcherChanged;
                     watcher.Error -= OnWatcherError;
 
@@ -309,6 +309,17 @@ namespace Emby.Server.Implementations.IO
         /// </summary>
         /// <param name="sender">The source of the event.</param>
         /// <param name="e">The <see cref="ErrorEventArgs" /> instance containing the event data.</param>
+        private void OnWatcherRenamed(object sender, RenamedEventArgs e)
+        {
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            _logger.LogDebug("Watcher Renamed: {OldPath} to {NewPath}", e.OldFullPath, e.FullPath);
+            ReportFileSystemRenamed(e.OldFullPath, e.FullPath);
+        }
+
         private void OnWatcherError(object sender, ErrorEventArgs e)
         {
             var ex = e.GetException();
@@ -340,6 +351,42 @@ namespace Emby.Server.Implementations.IO
             {
                 _logger.LogError(ex, "Exception in ReportFileSystemChanged. Path: {FullPath}", e.FullPath);
             }
+        }
+
+        /// <inheritdoc />
+        public void ReportFileSystemRenamed(string oldPath, string newPath)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(oldPath);
+            ArgumentException.ThrowIfNullOrEmpty(newPath);
+
+            if (IgnorePatterns.ShouldIgnore(oldPath) || IgnorePatterns.ShouldIgnore(newPath))
+            {
+                return;
+            }
+
+            // Ignore certain files, If the parent of an ignored path has a change event, ignore that too
+            foreach (var i in _tempIgnoredPaths.Keys)
+            {
+                if (_fileSystem.AreEqual(i, oldPath)
+                    || _fileSystem.ContainsSubPath(i, oldPath)
+                    || _fileSystem.AreEqual(i, newPath)
+                    || _fileSystem.ContainsSubPath(i, newPath))
+                {
+                    _logger.LogDebug("Ignoring rename from {OldPath} to {NewPath}", oldPath, newPath);
+                    return;
+                }
+
+                // Go up a level
+                var parent = Path.GetDirectoryName(i);
+                if (!string.IsNullOrEmpty(parent) && (_fileSystem.AreEqual(parent, oldPath) || _fileSystem.AreEqual(parent, newPath)))
+                {
+                    _logger.LogDebug("Ignoring rename from {OldPath} to {NewPath}", oldPath, newPath);
+                    return;
+                }
+            }
+
+            _libraryManager.OnFileSystemRenamed(oldPath, newPath);
+            CreateRefresher(newPath);
         }
 
         /// <inheritdoc />

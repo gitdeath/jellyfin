@@ -33,5 +33,11 @@ namespace MediaBrowser.Controller.Library
         /// </summary>
         /// <param name="path">The path.</param>
         void ReportFileSystemChanged(string path);
+        /// <summary>
+        /// Reports the file system renamed.
+        /// </summary>
+        /// <param name="oldPath">The old path.</param>
+        /// <param name="newPath">The new path.</param>
+        void ReportFileSystemRenamed(string oldPath, string newPath);
     }
 }

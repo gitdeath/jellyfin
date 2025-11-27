@@ -114,6 +114,52 @@ public sealed class BaseItemRepository
 
         var relatedItems = ids.SelectMany(f => TraverseHirachyDown(f, context)).ToArray();
 
+        // [Fix] Backfill UserData keys for Provider IDs if they are missing
+        // This ensures that if the item is re-added later (with a new ID but same Provider IDs), it can find the data.
+        var itemsWithProviders = context.BaseItemProviders
+            .WhereOneOrMany(relatedItems, e => e.ItemId)
+            .Select(p => new { p.ItemId, p.ProviderId, p.ProviderValue })
+            .ToList()
+            .GroupBy(x => x.ItemId);
+
+        foreach (var itemGroup in itemsWithProviders)
+        {
+            var itemId = itemGroup.Key;
+            var userData = context.UserData.Where(u => u.ItemId == itemId).ToList();
+            var userDataByUser = userData.GroupBy(u => u.UserId);
+
+            foreach (var userGroup in userDataByUser)
+            {
+                var mainEntry = userGroup.FirstOrDefault(u => u.CustomDataKey == itemId.ToString());
+                if (mainEntry == null) mainEntry = userGroup.First();
+
+                foreach (var provider in itemGroup)
+                {
+                    if (!userGroup.Any(u => u.CustomDataKey == provider.ProviderValue))
+                    {
+                        var newEntry = new UserData
+                        {
+                            ItemId = itemId,
+                            UserId = userGroup.Key,
+                            CustomDataKey = provider.ProviderValue,
+                            Played = mainEntry.Played,
+                            PlayCount = mainEntry.PlayCount,
+                            PlaybackPositionTicks = mainEntry.PlaybackPositionTicks,
+                            LastPlayedDate = mainEntry.LastPlayedDate,
+                            IsFavorite = mainEntry.IsFavorite,
+                            Rating = mainEntry.Rating,
+                            AudioStreamIndex = mainEntry.AudioStreamIndex,
+                            SubtitleStreamIndex = mainEntry.SubtitleStreamIndex,
+                            Item = null,
+                            User = null
+                        };
+                        context.UserData.Add(newEntry);
+                    }
+                }
+            }
+        }
+        context.SaveChanges();
+
         // Remove any UserData entries for the placeholder item that would conflict with the UserData
         // being detached from the item being deleted. This is necessary because, during an update,
         // UserData may be reattached to a new entry, but some entries can be left behind.
@@ -132,6 +178,27 @@ public sealed class BaseItemRepository
             .ExecuteUpdate(e => e
                 .SetProperty(f => f.RetentionDate, date)
                 .SetProperty(f => f.ItemId, PlaceholderId));
+
+        // [Fix] Smart Delete / Transfer: Check if a New Item already exists with the same Provider IDs
+        // This handles the "Add then Delete" race condition (Replace / Manual Scan)
+        var allProviderValues = itemsWithProviders.SelectMany(x => x).Select(p => p.ProviderValue).Distinct().ToList();
+        if (allProviderValues.Count > 0)
+        {
+            var otherItems = context.BaseItemProviders
+                .Where(p => allProviderValues.Contains(p.ProviderValue))
+                .Where(p => !relatedItems.Contains(p.ItemId))
+                .Select(p => new { p.ItemId, p.ProviderValue })
+                .ToList();
+
+            foreach (var other in otherItems)
+            {
+                context.UserData
+                    .Where(u => u.ItemId == PlaceholderId && u.CustomDataKey == other.ProviderValue)
+                    .ExecuteUpdate(u => u
+                        .SetProperty(x => x.ItemId, other.ItemId)
+                        .SetProperty(x => x.RetentionDate, (DateTime?)null));
+            }
+        }
 
         context.AncestorIds.WhereOneOrMany(relatedItems, e => e.ItemId).ExecuteDelete();
         context.AncestorIds.WhereOneOrMany(relatedItems, e => e.ParentItemId).ExecuteDelete();
